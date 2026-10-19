@@ -1,0 +1,209 @@
+﻿name: "Project Atlas CI/CD Pipeline"
+
+on:
+  push:
+    branches: [ "main", "develop", "feature/**" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+  LLM_PROVIDER: "deterministic"
+  API_KEY: "atlas-secret-key-2025"
+  CONFIDENCE_THRESHOLD: "0.70"
+
+jobs:
+  code-quality:
+    name: "Code Quality and Lint"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "Set Up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: "Install Dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8 bandit
+
+      - name: "Run Flake8 Linter"
+        run: |
+          flake8 src/ --max-line-length=120 --extend-ignore=E203,W503 --statistics || echo "Lint warnings found"
+
+      - name: "Bandit Security Scan"
+        run: |
+          bandit -r src/ -ll -ii -f json -o bandit-report.json || true
+
+      - name: "Upload Security Report"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-security-report
+          path: bandit-report.json
+          retention-days: 30
+
+  unit-tests:
+    name: "Unit and Integration Tests"
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "Set Up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: "Install Dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-html
+
+      - name: "Run Pytest Suite"
+        run: |
+          pytest tests/ -v --tb=short --cov=src --cov-report=xml:coverage.xml --html=test-report.html --self-contained-html -p no:warnings
+        env:
+          LLM_PROVIDER: ${{ env.LLM_PROVIDER }}
+          API_KEY: ${{ env.API_KEY }}
+          CONFIDENCE_THRESHOLD: ${{ env.CONFIDENCE_THRESHOLD }}
+
+      - name: "Upload Test Report"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-html-report
+          path: test-report.html
+          retention-days: 30
+
+  benchmark-evaluation:
+    name: "28-Question Benchmark Evaluation"
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "Set Up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: "Install Dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "Start FastAPI Server"
+        run: |
+          python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 &
+          sleep 8
+          curl -sf http://localhost:8000/health || exit 1
+        env:
+          LLM_PROVIDER: ${{ env.LLM_PROVIDER }}
+          API_KEY: ${{ env.API_KEY }}
+          CONFIDENCE_THRESHOLD: ${{ env.CONFIDENCE_THRESHOLD }}
+
+      - name: "Run Evaluation Benchmark"
+        run: python evaluation/run_evaluation.py 2>&1 | tee eval-output.txt
+        env:
+          LLM_PROVIDER: ${{ env.LLM_PROVIDER }}
+          API_KEY: ${{ env.API_KEY }}
+
+      - name: "Assert 100 Percent Pass Rate"
+        run: |
+          if grep -q "100.0%" eval-output.txt; then
+            echo "EVALUATION PASSED - 100 percent accuracy achieved"
+          else
+            echo "EVALUATION FAILED"
+            cat eval-output.txt
+            exit 1
+          fi
+
+      - name: "Upload Evaluation Results"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evaluation-results
+          path: |
+            eval-output.txt
+            evaluation/evaluation_results.json
+          retention-days: 90
+
+  docker-build:
+    name: "Docker Build and Compose Validation"
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "Set Up Docker Buildx"
+        uses: docker/setup-buildx-action@v3
+
+      - name: "Build FastAPI Docker Image"
+        run: docker build -f Dockerfile.api -t project-atlas-api:${{ github.sha }} .
+
+      - name: "Build PHP Portal Docker Image"
+        run: docker build -f Dockerfile.php -t project-atlas-php:${{ github.sha }} .
+
+      - name: "Validate docker-compose.yml Syntax"
+        run: docker compose config --quiet && echo "docker-compose.yml is valid"
+
+  security-scan:
+    name: "Security and Dependency Audit"
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "Set Up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: "Run pip-audit"
+        run: |
+          pip install pip-audit
+          pip install -r requirements.txt
+          pip-audit --requirement requirements.txt --format=json --output=pip-audit-report.json || true
+
+      - name: "Upload Audit Report"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-audit-report
+          path: pip-audit-report.json
+          retention-days: 30
+
+  ci-summary:
+    name: "CI Pipeline Summary"
+    runs-on: ubuntu-latest
+    needs: [unit-tests, benchmark-evaluation, docker-build, security-scan]
+    if: always()
+    steps:
+      - name: "Write Pipeline Summary"
+        run: |
+          echo "# Project Atlas CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Benchmark | ${{ needs.benchmark-evaluation.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.docker-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
