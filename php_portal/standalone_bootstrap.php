@@ -16,7 +16,7 @@ function &get_instance() {
 }
 
 function site_url($uri = '') {
-    return '/' . ltrim($uri, '/');
+    return '/index.php/' . ltrim($uri, '/');
 }
 
 function redirect($uri = '') {
@@ -138,6 +138,11 @@ class CI_Controller {
 // Router dispatcher
 $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $uri = trim($uri, '/');
+if ($uri === 'index.php') {
+    $uri = '';
+} elseif (strpos($uri, 'index.php/') === 0) {
+    $uri = substr($uri, strlen('index.php/'));
+}
 
 require_once APPPATH . 'controllers/Chat.php';
 $controller = new Chat();
