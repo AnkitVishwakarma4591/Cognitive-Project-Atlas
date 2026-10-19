@@ -1,0 +1,69 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: atlas_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password_2025
+      MYSQL_DATABASE: project_atlas
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./seed_data/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password_2025"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: atlas_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - ENVIRONMENT=development
+      - API_KEY=atlas-secret-key-2025
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=project_atlas
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=root_password_2025
+      - MYSQL_READONLY_USER=atlas_readonly
+      - MYSQL_READONLY_PASSWORD=AtlasReadOnly_Pass2025!
+      - LLM_PROVIDER=deterministic
+      - CONFIDENCE_THRESHOLD=0.70
+      - ENABLE_SEMANTIC_CACHE=true
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  php_portal:
+    build:
+      context: .
+      dockerfile: Dockerfile.php
+    container_name: atlas_php_portal
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    environment:
+      - ATLAS_API_URL=http://api:8000
+      - ATLAS_API_KEY=atlas-secret-key-2025
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=project_atlas
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=root_password_2025
+      - CI_BASE_URL=http://localhost:8080/
+    depends_on:
+      - api
+
+volumes:
+  mysql_data:
