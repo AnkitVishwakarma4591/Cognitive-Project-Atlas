@@ -111,6 +111,20 @@ flowchart TD
     Formatter --> API
 ```
 
+### Application Screenshots
+
+The portal provides a chat interface with sample evaluation questions and a client selector for demonstrating the report copilot.
+
+![Project Atlas portal showing the client selector, evaluation questions, and chat interface](assets/images/project-atlas-portal-overview.png)
+
+The FastAPI Swagger UI documents the available API groups, including chat, report ingestion, the report catalog, and human escalation endpoints.
+
+![FastAPI Swagger UI with the report copilot and knowledge base endpoints](assets/images/fastapi-swagger-endpoints.png)
+
+The API documentation also presents the endpoint groups in a compact view for a quick overview of the service surface.
+
+![Compact overview of Project Atlas FastAPI endpoint groups](assets/images/fastapi-swagger-endpoint-groups.png)
+
 ---
 
 ## 3. Entity Relationship Diagram (ER)
